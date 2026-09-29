@@ -4,14 +4,22 @@ Ogni test avvia il server reale (``python server.py``) come
 subprocesso e lo interroga su stdio con un client MCP: la stessa
 interazione che esegue l'ispettore MCP, ma scriptata e ripetibile.
 
+Il server usa il client in api_client.py; i test presuppongono la
+simulazione locale con dati sintetichi (nessuna EVOLUTION_API_BASE_URL).
+
 Controlli coperti:
 - ``search_contract`` restituisce i risultati con una ricerca che
   corrisponde a fornitori noti (anche senza distinzione
-  maiuscole/minuscole);
+  maiuscole/minuscole) e solo i contratti del fornitore cercato;
 - ``search_contract`` restituisce un elenco vuoto con una ricerca
   senza corrispondenze;
 - ``get_contract`` restituisce il dettaglio completo con un id valido;
 - ``get_contract`` restituisce un errore con un id inesistente;
+- ``get_contract`` restituisce un errore di accesso negato per un
+  contratto protetto (id ``denied-001``);
+- ``get_contract`` restituisce un errore leggibile se la API fallisce
+  con HTTP 500 (id ``errore-001``) o non risponde in tempo, timeout
+  (id ``timeout-001``);
 - ``search_contract`` non restituisce tutti i contratti quando gli
   viene passato un nome fornitore vuoto (o solo spazi).
 
@@ -23,19 +31,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import pytest
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 # Radice del progetto: la cartella che contiene server.py
 RAV = Path(__file__).resolve().parent.parent
 SERVER_PATH = RAV / "server.py"
-DB_PATH = RAV / "data" / "contratti.db"
+
+# Garantisce l'import di api_client anche se pytest non mette la
+# radice del progetto nel sys.path.
+if str(RAV) not in sys.path:
+    sys.path.insert(0, str(RAV))
+
+from api_client import SimulatedContractsApi
 
 TOOL_SEARCH = "search_contract"
 TOOL_DETAIL = "get_contract"
@@ -94,23 +106,8 @@ def _payload(risultato):
 
 
 def _totale_contratti() -> int:
-    """Numero totale di contratti nel database (lettura sola)."""
-    assert DB_PATH.exists(), f"Database non trovato: {DB_PATH}"
-    con = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
-    try:
-        return con.execute("SELECT COUNT(*) FROM contratti").fetchone()[0]
-    finally:
-        con.close()
-
-
-@pytest.fixture(autouse=True, scope="module")
-def _db_disponibile():
-    if not DB_PATH.exists():
-        pytest.skip(
-            f"Database non trovato: {DB_PATH}. "
-            "Esegui prima python dataset/genera_db.py.",
-            allow_module_level=True,
-        )
+    """Numero totale di contratti visibili nella simulazione locale."""
+    return len(SimulatedContractsApi().elenco_contratti())
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +159,45 @@ async def _scenario_dettaglio_id_valido(sessione):
     assert dettaglio["numero"] == riferimento["numero"]
     assert dettaglio["nome_fornitore"] == riferimento["nome_fornitore"]
     assert dettaglio["stato"] == riferimento["stato"]
-    assert "tipo" in dettaglio
+    # Campoli aggiuntivi del dettaglio API.
+    for campo in ("id_fornitore", "descrizione", "data_inizio", "data_fine"):
+        assert campo in dettaglio, f"mancante il campo {campo!r} nel dettaglio"
 
 
 async def _scenario_dettaglio_id_inesistente(sessione):
-    dettaglio = _payload(await sessione.call_tool(TOOL_DETAIL, {"id": 999999}))
+    dettaglio = _payload(await sessione.call_tool(TOOL_DETAIL, {"id": "inesistente"}))
     assert isinstance(dettaglio, dict), f"risultato inatteso: {dettaglio!r}"
     assert "errore" in dettaglio, "un id inesistente deve restituire un errore"
+
+
+async def _scenario_accesso_negato(sessione):
+    """Il contratto protetto (denied-001) restituisce un errore di accesso negato."""
+    dettaglio = _payload(await sessione.call_tool(TOOL_DETAIL, {"id": "denied-001"}))
+    assert isinstance(dettaglio, dict), f"risultato inatteso: {dettaglio!r}"
+    assert "errore" in dettaglio
+    assert "ccesso negato" in dettaglio["errore"], (
+        f"il messaggio non segnala l'accesso negato: {dettaglio['errore']!r}"
+    )
+
+
+async def _scenario_errore_api(sessione):
+    """Il contratto che simula un errore interno (errore-001) restituisce un errore HTTP 500."""
+    dettaglio = _payload(await sessione.call_tool(TOOL_DETAIL, {"id": "errore-001"}))
+    assert isinstance(dettaglio, dict), f"risultato inatteso: {dettaglio!r}"
+    assert "errore" in dettaglio
+    assert "HTTP 500" in dettaglio["errore"], (
+        f"il messaggio non segnala l'errore 500: {dettaglio['errore']!r}"
+    )
+
+
+async def _scenario_timeout(sessione):
+    """Il contratto che simula un timeout (timeout-001) restituisce un errore di timeout."""
+    dettaglio = _payload(await sessione.call_tool(TOOL_DETAIL, {"id": "timeout-001"}))
+    assert isinstance(dettaglio, dict), f"risultato inatteso: {dettaglio!r}"
+    assert "errore" in dettaglio
+    assert "timeout" in dettaglio["errore"].lower(), (
+        f"il messaggio non segnala il timeout: {dettaglio['errore']!r}"
+    )
 
 
 async def _scenario_nome_vuoto(sessione):
@@ -218,6 +247,21 @@ def test_dettaglio_con_id_valido():
 def test_dettaglio_con_id_inesistente():
     """get_contract restituisce un errore per un id inesistente."""
     _esegui(_scenario_dettaglio_id_inesistente)
+
+
+def test_accesso_negato():
+    """get_contract restituisce un errore di accesso negato per un contratto protetto."""
+    _esegui(_scenario_accesso_negato)
+
+
+def test_errore_api():
+    """get_contract restituisce un errore leggibile quando la API fallisce con HTTP 500."""
+    _esegui(_scenario_errore_api)
+
+
+def test_timeout():
+    """get_contract restituisce un errore di timeout se la API non risponde in tempo."""
+    _esegui(_scenario_timeout)
 
 
 def test_nome_fornitore_vuoto_non_restituisce_tutti():
