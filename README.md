@@ -7,3 +7,11 @@ Start with synthetic data and simulate the API behavior described in [docs/contr
 The first handoff is a locally demonstrable MCP server and brief run instructions. Connection to a real Evolution environment requires a test endpoint and an approved authentication flow. Synapse integration will be reviewed separately after the API-backed server works.
 
 Do not commit credentials, tokens, customer data, local databases, or environment files.
+
+## Tests
+
+End-to-end tests live in `MCP_intro/tests/`. They spawn the real server and talk to it over stdio with an MCP client (the same interaction the MCP Inspector performs). From `MCP_intro/`:
+
+```
+.venv\Scripts\python -m pytest tests/ -v
+```

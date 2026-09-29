@@ -38,13 +38,17 @@ def _connessione() -> sqlite3.Connection:
 
 
 @mcp.tool()
-def search_contract(nome_fornitore: str) -> list[dict]:
+def search_contract(nome_fornitore: str) -> dict | list[dict]:
     """Cerca i contratti di un fornitore per nome (cerca parziale, senza distinzione maiuscole/minuscole).
 
     Restituisce l'elenco dei contratti trovati con id, numero,
     nome_fornitore e stato. Se nessuna riga corrisponde, l'elenco è vuoto.
+    Se nome_fornitore è vuoto (o contiene solo spazi), non esegue la
+    ricerca e restituisce un dizionario con la chiave "errore".
     """
     nome = nome_fornitore.strip()
+    if not nome:
+        return {"errore": "nome_fornitore non può essere vuoto"}
     con = _connessione()
     try:
         cur = con.execute(
