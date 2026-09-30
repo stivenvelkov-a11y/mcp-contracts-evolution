@@ -1,68 +1,68 @@
-"""Apre e legge il database data/contratti.db.
+"""Opens and reads the data/contracts.db database.
 
-Stampa tutti i contratti in formato tabellare, seguiti da un
-riepilogo per stato e per tipo.
+Prints all contracts in table form, followed by a
+summary by status and by type.
 """
 
 from collections import Counter
 from pathlib import Path
 import sqlite3
 
-# Percorso del database: cartella "data" alla radice del progetto
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "contratti.db"
+# Database path: the "data" folder at the project root
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "contracts.db"
 
-COLONNE = ("id", "numero", "nome_fornitore", "stato", "tipo")
+COLUMNS = ("id", "number", "supplier_name", "status", "contract_type")
 
 
-def leggi_contratti(db_path: Path = DB_PATH) -> list[tuple]:
-    """Restituisce tutti i contratti come lista di tuple ordinate per id."""
+def read_contracts(db_path: Path = DB_PATH) -> list[tuple]:
+    """Returns all contracts as a list of tuples ordered by id."""
     con = sqlite3.connect(db_path)
     try:
         con.row_factory = sqlite3.Row
         cur = con.execute(
-            "SELECT id, numero, nome_fornitore, stato, tipo FROM contratti ORDER BY id"
+            "SELECT id, number, supplier_name, status, contract_type FROM contracts ORDER BY id"
         )
         return [tuple(row) for row in cur.fetchall()]
     finally:
         con.close()
 
 
-def stampa_tabella(contratti: list[tuple]) -> None:
-    """Stampa i contratti in forma tabellare allineata."""
-    righe = [COLONNE] + [tuple(str(val) for val in contratto) for contratto in contratti]
-    larghezze = [max(len(r[i]) for r in righe) for i in range(len(COLONNE))]
+def print_table(contracts: list[tuple]) -> None:
+    """Prints the contracts in an aligned table form."""
+    rows = [COLUMNS] + [tuple(str(val) for val in contract) for contract in contracts]
+    widths = [max(len(r[i]) for r in rows) for i in range(len(COLUMNS))]
 
-    def formatta(riga):
-        return "  ".join(val.ljust(l) for val, l in zip(riga, larghezze))
+    def format_row(row):
+        return "  ".join(val.ljust(l) for val, l in zip(row, widths))
 
-    print(formatta(COLONNE))
-    print("-" * (sum(larghezze) + 2 * len(larghezze)))
-    for riga in righe[1:]:
-        print(formatta(riga))
+    print(format_row(COLUMNS))
+    print("-" * (sum(widths) + 2 * len(widths)))
+    for row in rows[1:]:
+        print(format_row(row))
 
 
-def riepilogo(contratti: list[tuple]) -> None:
-    """Stampa conteggi per stato e per tipo."""
-    per_stato = Counter(c[3] for c in contratti)
-    per_tipo = Counter(c[4] for c in contratti)
-    print(f"\nTotale contratti: {len(contratti)}")
-    print("Per stato: " + ", ".join(f"{k}={v}" for k, v in per_stato.items()))
-    print("Per tipo:  " + ", ".join(f"{k}={v}" for k, v in per_tipo.items()))
+def summary(contracts: list[tuple]) -> None:
+    """Prints counts by status and by type."""
+    by_status = Counter(c[3] for c in contracts)
+    by_type = Counter(c[4] for c in contracts)
+    print(f"\nTotal contracts: {len(contracts)}")
+    print("By status: " + ", ".join(f"{k}={v}" for k, v in by_status.items()))
+    print("By type:  " + ", ".join(f"{k}={v}" for k, v in by_type.items()))
 
 
 def main() -> None:
     if not DB_PATH.exists():
-        print(f"Database non trovato: {DB_PATH}")
-        print("Esegui prima il generatore: python dataset/genera_db.py")
+        print(f"Database not found: {DB_PATH}")
+        print("Run the generator first: python dataset/generate_db.py")
         return
 
-    contratti = leggi_contratti()
-    if not contratti:
-        print("Nessun contratto trovato nel database.")
+    contracts = read_contracts()
+    if not contracts:
+        print("No contracts found in the database.")
         return
 
-    stampa_tabella(contratti)
-    riepilogo(contratti)
+    print_table(contracts)
+    summary(contracts)
 
 
 if __name__ == "__main__":

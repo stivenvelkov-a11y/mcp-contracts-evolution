@@ -1,39 +1,39 @@
-"""Client read-only per l'Evolution Contracts API.
+"""Read-only client for the Evolution Contracts API.
 
-Implementa gli endpoint descritti in docs/contracts-api.md:
+Implements the endpoints described in docs/contracts-api.md:
 
-- ``GET /api/contracts?search=<testo>``          (ricerca)
-- ``GET /api/contracts?supplierId=<id>``         (filtro per id fornitore)
-- ``GET /api/contracts?status=<stato>``          (filtro per stato)
-- ``GET /api/contracts/{contractId}``            (dettaglio)
-- ``GET /api/contracts/{contractId}/clauses``    (clausole, opzionale)
+- ``GET /api/contracts?search=<text>``          (search)
+- ``GET /api/contracts?supplierId=<id>``        (filter by supplier id)
+- ``GET /api/contracts?status=<status>``        (filter by status)
+- ``GET /api/contracts/{contractId}``           (detail)
+- ``GET /api/contracts/{contractId}/clauses``   (clauses, optional)
 
-Due backend intercambiabili, scelti in base all'ambiente, così lo
-stesso server può passare alla API reale senza cambiare
-l'interfaccia pubblica dei tool (vedi README):
+Two interchangeable backends, chosen based on the environment, so the
+same server can switch to the real API without changing
+the public interface of the tools (see README):
 
-- ``HttpContractsApi``: chiamate HTTP alla API reale, usata quando
-  è impostata ``EVOLUTION_API_BASE_URL`` (l'URL e il flusso token
-  saranno forniti dal team dopo la revisione dell'integrazione
-  locale; non si inventano header di tenant).
-- ``SimulatedContractsApi``: simulazione locale deterministica con
-  dati sintetichi che rispecchiano gli esempi della documentazione e
-  copre i casi richiesti per la prova locale: risultati, ricerca
-  vuota, id sconosciuto, accesso negato, errore interno dell'API,
-  timeout e separazione tra tenant sintetici. Per provare i casi di
-  errore si usa ``get_contract`` con questi id dedicati (visibili
-  anche in ricerca sotto il fornitore "Delta S.p.A."):
+- ``HttpContractsApi``: HTTP calls to the real API, used when
+  ``EVOLUTION_API_BASE_URL`` is set (the URL and the token flow
+  will be provided by the team after the local integration
+  review; no tenant headers are invented).
+- ``SimulatedContractsApi``: deterministic local simulation with
+  synthetic data that mirrors the documentation examples and
+  covers the cases requested for local testing: results, empty
+  search, unknown id, denied access, internal API error,
+  timeout and separation between synthetic tenants. To exercise the
+  error cases, use ``get_contract`` with these dedicated ids (also
+  visible in search under the supplier "Delta S.p.A."):
 
-  - ``denied-001``  -> accesso negato (HTTP 403);
-  - ``errore-001``  -> errore interno dell'API (HTTP 500);
-  - ``timeout-001`` -> timeout della chiamata (nessuna risposta in tempo).
+  - ``denied-001``  -> denied access (HTTP 403);
+  - ``error-001``   -> internal API error (HTTP 500);
+  - ``timeout-001`` -> call timeout (no response in time).
 
-Variabili d'ambiente (tutte opzionali):
-- ``EVOLUTION_API_BASE_URL``: URL base della API reale (es. https://ambiente.evolution).
-- ``EVOLUTION_API_TOKEN``: bearer token, solo se esplicitamente
-  configurato (il flusso sarà confermato con il team).
-- ``EVOLUTION_SIMULATION_SUPPLIER_ID``: nella simulazione, restringe
-  la visibilità al fornitore indicato (utente esterno).
+Environment variables (all optional):
+- ``EVOLUTION_API_BASE_URL``: base URL of the real API (e.g. https://environment.evolution).
+- ``EVOLUTION_API_TOKEN``: bearer token, only if explicitly
+  configured (the flow will be confirmed with the team).
+- ``EVOLUTION_SIMULATION_SUPPLIER_ID``: in the simulation, restricts
+  visibility to the given supplier (external user).
 """
 
 from __future__ import annotations
@@ -44,17 +44,17 @@ from urllib.parse import quote
 
 import httpx
 
-# Variabili d'ambiente
+# Environment variables
 ENV_BASE_URL = "EVOLUTION_API_BASE_URL"
 ENV_TOKEN = "EVOLUTION_API_TOKEN"
 ENV_SIMULATION_SUPPLIER = "EVOLUTION_SIMULATION_SUPPLIER_ID"
 
-# Timeout in secondi per le chiamate HTTP
+# Timeout in seconds for the HTTP calls
 TIMEOUT_DEFAULT = 10.0
 
 
 class ApiError(Exception):
-    """Errore restituito dalla API (simulata o reale)."""
+    """Error returned by the API (simulated or real)."""
 
     def __init__(self, status: int, message: str) -> None:
         super().__init__(f"HTTP {status}: {message}")
@@ -63,65 +63,65 @@ class ApiError(Exception):
 
 
 class ContractsApi(Protocol):
-    """Interfaccia pubblica del client, usata da server.py."""
+    """Public interface of the client, used by server.py."""
 
-    def cerca_contratti(self, search: str) -> list[dict]:
-        """Ricerca per testo (l'API confronta anche numero, descrizione e file)."""
+    def search_contracts(self, search: str) -> list[dict]:
+        """Text search (the API also matches number, description and file)."""
 
-    def elenco_contratti(self) -> list[dict]:
-        """Tutti i contratti visibili (l'endpoint non ha paginazione)."""
+    def list_contracts(self) -> list[dict]:
+        """All visible contracts (the endpoint has no pagination)."""
 
-    def dettaglio_contratto(self, contract_id: str) -> dict:
-        """Dettaglio di un singolo contratto."""
+    def get_contract_detail(self, contract_id: str) -> dict:
+        """Detail of a single contract."""
 
-    def clausole_contratto(self, contract_id: str) -> list[dict]:
-        """Clausole di un contratto."""
+    def get_contract_clauses(self, contract_id: str) -> list[dict]:
+        """Clauses of a contract."""
 
 
 # ---------------------------------------------------------------------------
-# Mappatura dei record API (camelCase) sui campi dei tool
+# Mapping of the API records (camelCase) to the tool fields
 # ---------------------------------------------------------------------------
 
 
-def contratto_per_tool(record: dict) -> dict:
-    """Mappa un record API sui campi restituiti dal tool di ricerca."""
+def contract_for_tool(record: dict) -> dict:
+    """Maps an API record to the fields returned by the search tool."""
     return {
         "id": record["id"],
-        "numero": record["contractNumber"],
-        "nome_fornitore": record["supplierName"],
-        "stato": record["status"],
+        "number": record["contractNumber"],
+        "supplier_name": record["supplierName"],
+        "status": record["status"],
     }
 
 
-def dettaglio_per_tool(record: dict) -> dict:
-    """Mappa il dettaglio API sui campi restituiti dal tool di dettaglio."""
-    dettaglio = contratto_per_tool(record)
-    dettaglio.update(
+def detail_for_tool(record: dict) -> dict:
+    """Maps the API detail to the fields returned by the detail tool."""
+    detail = contract_for_tool(record)
+    detail.update(
         {
-            "id_fornitore": record.get("supplierId"),
-            "descrizione": record.get("description"),
-            "data_inizio": record.get("startDate"),
-            "data_fine": record.get("endDate"),
+            "supplier_id": record.get("supplierId"),
+            "description": record.get("description"),
+            "start_date": record.get("startDate"),
+            "end_date": record.get("endDate"),
         }
     )
-    return dettaglio
+    return detail
 
 
 # ---------------------------------------------------------------------------
-# Simulazione locale
+# Local simulation
 # ---------------------------------------------------------------------------
 
 
 class SimulatedContractsApi:
-    """Simulazione deterministica della API con dati sintetichi.
+    """Deterministic simulation of the API with synthetic data.
 
-    I record rispecchiano gli esempi di docs/contracts-api.md.
-    ``supplier_id`` (opzionale) simula un utente esterno fornitore,
-    che vede solo i propri contratti: è il caso "accesso negato"
-    richiesto dalla documentazione per la prova locale.
+    The records mirror the examples in docs/contracts-api.md.
+    ``supplier_id`` (optional) simulates an external supplier user,
+    who can only see their own contracts: this is the "denied access"
+    case requested by the documentation for local testing.
     """
 
-    # Contratti del tenant "demo" (visibili).
+    # Contracts of the "demo" tenant (visible).
     _TENANT_DEMO = [
         {
             "id": "demo-001",
@@ -153,64 +153,64 @@ class SimulatedContractsApi:
             "startDate": "2026-03-01",
             "endDate": "2026-12-31",
         },
-        # La descrizione contiene "alfa" ma il fornitore è Beta:
-        # serve a verificare che il tool filtri per nome fornitore.
+        # The description contains "alfa" but the supplier is Beta:
+        # it serves to verify that the tool filters by supplier name.
         {
             "id": "demo-004",
             "contractNumber": "A-2026-004",
             "supplierId": "supplier-beta",
             "supplierName": "Beta S.r.l.",
             "status": "PROCESSING",
-            "description": "Ricambi per Alfa",
+            "description": "Spare parts for Alfa",
             "startDate": None,
             "endDate": None,
         },
     ]
 
-    # Contratti che servono a simulare i casi di errore richiesti
-    # dalla documentazione: sono visibili in ricerca e nell'elenco,
-    # ma il dettaglio (e le clausole) fallisce come indicato dall'id.
-    _CONTRATTI_SPECIALI = [
-        # Accesso negato: l'identità corrente non ha il permesso di
-        # lettura su questo contratto.
+    # Contracts used to simulate the error cases requested
+    # by the documentation: they are visible in search and in the list,
+    # but the detail (and the clauses) fails as indicated by the id.
+    _SPECIAL_CONTRACTS = [
+        # Denied access: the current identity does not have
+        # read permission on this contract.
         {
             "id": "denied-001",
             "contractNumber": "A-2026-101",
             "supplierId": "supplier-delta",
             "supplierName": "Delta S.p.A.",
             "status": "CLOSE_TO_EXPIRATION",
-            "description": "Assistenza",
+            "description": "Assistance",
             "startDate": "2025-01-01",
             "endDate": "2026-06-30",
         },
-        # Errore interno dell'API (HTTP 500).
+        # Internal API error (HTTP 500).
         {
-            "id": "errore-001",
+            "id": "error-001",
             "contractNumber": "A-2026-102",
             "supplierId": "supplier-delta",
             "supplierName": "Delta S.p.A.",
             "status": "VALID",
-            "description": "Manutenzione",
+            "description": "Maintenance",
             "startDate": "2026-01-01",
             "endDate": "2026-12-31",
         },
-        # Timeout della chiamata: la risposta non arriva in tempo.
+        # Call timeout: the response does not arrive in time.
         {
             "id": "timeout-001",
             "contractNumber": "A-2026-103",
             "supplierId": "supplier-delta",
             "supplierName": "Delta S.p.A.",
             "status": "DRAFT",
-            "description": "Consulenza",
+            "description": "Consulting",
             "startDate": None,
             "endDate": None,
         },
     ]
 
-    # Contratto di un altro tenant sintetico: mai visibile (separazione).
-    _ALTRO_TENANT = [
+    # Contract of another synthetic tenant: never visible (separation).
+    _OTHER_TENANT = [
         {
-            "id": "altro-001",
+            "id": "other-001",
             "contractNumber": "X-2026-001",
             "supplierId": "supplier-gamma",
             "supplierName": "Gamma S.p.A.",
@@ -221,7 +221,7 @@ class SimulatedContractsApi:
         },
     ]
 
-    _CLAUSOLE = {
+    _CLAUSES = {
         "demo-001": [
             {
                 "id": 1,
@@ -241,74 +241,74 @@ class SimulatedContractsApi:
     }
 
     def __init__(self, supplier_id: str | None = None) -> None:
-        # None = visibilità completa del tenant "demo";
-        # altrimenti solo i contratti del fornitore indicato.
+        # None = full visibility of the "demo" tenant;
+        # otherwise only the contracts of the given supplier.
         self._supplier_id = supplier_id
 
-    def _tutti(self) -> list[dict]:
-        """Tutti i contratti del tenant "demo", compresi quelli speciali."""
-        return self._TENANT_DEMO + self._CONTRATTI_SPECIALI
+    def _all_contracts(self) -> list[dict]:
+        """All contracts of the "demo" tenant, including the special ones."""
+        return self._TENANT_DEMO + self._SPECIAL_CONTRACTS
 
-    def _visibili(self) -> list[dict]:
-        visibili = [dict(c) for c in self._tutti()]
+    def _visible_contracts(self) -> list[dict]:
+        visible = [dict(c) for c in self._all_contracts()]
         if self._supplier_id is not None:
-            visibili = [c for c in visibili if c["supplierId"] == self._supplier_id]
-        return visibili
+            visible = [c for c in visible if c["supplierId"] == self._supplier_id]
+        return visible
 
-    def cerca_contratti(self, search: str) -> list[dict]:
-        # Come l'API reale, la ricerca parziale (senza distinzione
-        # maiuscole/minuscole) confronta anche numero e descrizione.
-        testo = search.lower()
+    def search_contracts(self, search: str) -> list[dict]:
+        # Like the real API, the partial search (case-insensitive)
+        # also matches number and description.
+        text = search.lower()
         return [
             c
-            for c in self._visibili()
-            if testo in c["supplierName"].lower()
-            or testo in c["contractNumber"].lower()
-            or testo in (c.get("description") or "").lower()
+            for c in self._visible_contracts()
+            if text in c["supplierName"].lower()
+            or text in c["contractNumber"].lower()
+            or text in (c.get("description") or "").lower()
         ]
 
-    def elenco_contratti(self) -> list[dict]:
-        return self._visibili()
+    def list_contracts(self) -> list[dict]:
+        return self._visible_contracts()
 
-    def dettaglio_contratto(self, contract_id: str) -> dict:
-        for contratto in self._tutti():
-            if contratto["id"] != contract_id:
+    def get_contract_detail(self, contract_id: str) -> dict:
+        for contract in self._all_contracts():
+            if contract["id"] != contract_id:
                 continue
             if (
                 self._supplier_id is not None
-                and contratto["supplierId"] != self._supplier_id
+                and contract["supplierId"] != self._supplier_id
             ):
                 raise ApiError(
-                    403, "il contratto appartiene a un altro fornitore"
+                    403, "the contract belongs to another supplier"
                 )
-            # Casi di errore simulati (vedi il docstring della classe).
+            # Simulated error cases (see the class docstring).
             if contract_id == "denied-001":
                 raise ApiError(
                     403,
-                    "l'identità corrente non ha il permesso di lettura "
-                    "su questo contratto",
+                    "the current identity does not have read permission "
+                    "on this contract",
                 )
-            if contract_id == "errore-001":
-                raise ApiError(500, "Errore interno del server (simulato)")
+            if contract_id == "error-001":
+                raise ApiError(500, "Internal server error (simulated)")
             if contract_id == "timeout-001":
-                raise ApiError(0, "la richiesta non è tornata in tempo (simulato)")
-            return dict(contratto)
-        # Id sconosciuto, o contratto di un altro tenant (non visibile).
-        raise ApiError(404, f"Nessun contratto con id {contract_id}")
+                raise ApiError(0, "the request did not return in time (simulated)")
+            return dict(contract)
+        # Unknown id, or contract of another tenant (not visible).
+        raise ApiError(404, f"No contract with id {contract_id}")
 
-    def clausole_contratto(self, contract_id: str) -> list[dict]:
-        # Le clausole seguono le stesse regole di accesso del dettaglio.
-        self.dettaglio_contratto(contract_id)
-        return [dict(c) for c in self._CLAUSOLE.get(contract_id, [])]
+    def get_contract_clauses(self, contract_id: str) -> list[dict]:
+        # The clauses follow the same access rules as the detail.
+        self.get_contract_detail(contract_id)
+        return [dict(c) for c in self._CLAUSES.get(contract_id, [])]
 
 
 # ---------------------------------------------------------------------------
-# API reale
+# Real API
 # ---------------------------------------------------------------------------
 
 
 class HttpContractsApi:
-    """Client per la API Evolution reale (solo operazioni di lettura)."""
+    """Client for the real Evolution API (read-only operations)."""
 
     def __init__(
         self,
@@ -317,8 +317,8 @@ class HttpContractsApi:
         timeout: float = TIMEOUT_DEFAULT,
     ) -> None:
         headers = {}
-        # Nessun header di tenant inventato: il bearer si usa solo se
-        # esplicitamente configurato tramite EVOLUTION_API_TOKEN.
+        # No invented tenant headers: the bearer token is only used
+        # if explicitly configured through EVOLUTION_API_TOKEN.
         if token:
             headers["Authorization"] = f"Bearer {token}"
         self._client = httpx.Client(
@@ -329,48 +329,48 @@ class HttpContractsApi:
         try:
             response = self._client.get(path, params=params)
         except httpx.HTTPError as exc:
-            raise ApiError(0, f"Errore di rete verso la API: {exc}") from exc
+            raise ApiError(0, f"Network error contacting the API: {exc}") from exc
         if response.status_code >= 400:
-            raise ApiError(response.status_code, self._messaggio_errore(response))
+            raise ApiError(response.status_code, self._error_message(response))
         return response.json()
 
     @staticmethod
-    def _messaggio_errore(response: httpx.Response) -> str:
+    def _error_message(response: httpx.Response) -> str:
         try:
-            corpo = response.json()
+            body = response.json()
         except ValueError:
-            corpo = None
-        if isinstance(corpo, dict):
-            for chiave in ("message", "detail", "error"):
-                if chiave in corpo:
-                    return str(corpo[chiave])
-        if corpo is not None:
-            return str(corpo)
+            body = None
+        if isinstance(body, dict):
+            for key in ("message", "detail", "error"):
+                if key in body:
+                    return str(body[key])
+        if body is not None:
+            return str(body)
         return response.text[:200] or f"HTTP {response.status_code}"
 
-    def cerca_contratti(self, search: str) -> list[dict]:
+    def search_contracts(self, search: str) -> list[dict]:
         return self._get("/api/contracts", params={"search": search})
 
-    def elenco_contratti(self) -> list[dict]:
+    def list_contracts(self) -> list[dict]:
         return self._get("/api/contracts")
 
-    def dettaglio_contratto(self, contract_id: str) -> dict:
+    def get_contract_detail(self, contract_id: str) -> dict:
         return self._get(f"/api/contracts/{quote(contract_id, safe='')}")
 
-    def clausole_contratto(self, contract_id: str) -> list[dict]:
+    def get_contract_clauses(self, contract_id: str) -> list[dict]:
         return self._get(f"/api/contracts/{quote(contract_id, safe='')}/clauses")
 
 
 # ---------------------------------------------------------------------------
-# Scelta del client
+# Client selection
 # ---------------------------------------------------------------------------
 
 
-def crea_client() -> ContractsApi:
-    """Restituisce il client attivo in base all'ambiente.
+def create_client() -> ContractsApi:
+    """Returns the active client based on the environment.
 
-    Se ``EVOLUTION_API_BASE_URL`` è impostata usa la API reale,
-    altrimenti la simulazione locale.
+    If ``EVOLUTION_API_BASE_URL`` is set, uses the real API;
+    otherwise uses the local simulation.
     """
     base_url = os.environ.get(ENV_BASE_URL, "").strip()
     if base_url:
