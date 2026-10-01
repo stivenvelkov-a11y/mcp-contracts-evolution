@@ -15,17 +15,14 @@ Checks covered:
 - ``search_contract`` returns an empty list with a search
   that has no matches;
 - ``get_contract`` returns the full detail with a valid id;
-- ``get_contract`` returns an error with a nonexistent id;
-- ``get_contract`` returns a denied-access error for a
-  protected contract (id ``denied-001``);
-- ``get_contract`` returns a readable error if the API fails
-  with HTTP 500 (id ``error-001``) or does not respond in time,
-  timeout (id ``timeout-001``);
-- ``search_contract`` does not return all contracts when passed
-  an empty supplier name (or only spaces).
+- ``get_contract`` raises a ToolError (is_error=True) with a nonexistent id;
+- ``get_contract`` raises a ToolError for access denied (id ``denied-001``);
+- ``get_contract`` raises a ToolError if the API fails with HTTP 500
+  (id ``error-001``) or times out (id ``timeout-001``);
+- ``search_contract`` raises a ToolError when passed an empty supplier name.
 
 Running (from the MCP_intro folder):
-    .venv\\Scripts\\python -m pytest tests/ -v
+    python -m pytest tests/ -v
 """
 
 from __future__ import annotations
@@ -88,9 +85,9 @@ def _run(scenario) -> None:
 
 
 def _payload(result):
-    """Extracts the payload returned by the tool from a CallToolResult."""
+    """Extracts the payload returned by the tool from a successful CallToolResult."""
     assert not result.is_error, (
-        f"The tool returned a protocol error: {result.content}"
+        f"Expected tool success, but got an error: {result.content}"
     )
     if result.structured_content is not None:
         content = result.structured_content
@@ -104,6 +101,13 @@ def _payload(result):
     if isinstance(text, dict) and set(text) == {"result"}:
         return text["result"]
     return text
+
+
+def _error_text(result) -> str:
+    """Extracts error text from a failed CallToolResult (is_error == True)."""
+    assert result.is_error, "Expected tool execution to fail (is_error=True), but it succeeded."
+    assert len(result.content) > 0, "Tool error result has no content."
+    return result.content[0].text
 
 
 def _total_contracts() -> int:
@@ -132,8 +136,7 @@ async def _scenario_search_with_results(session):
         assert {"id", "number", "supplier_name", "status"} <= set(contract)
         assert "alfa" in contract["supplier_name"].lower()
 
-    # The search is case-insensitive: even the
-    # lowercase query finds "Beta".
+    # The search is case-insensitive
     res_beta = _payload(await session.call_tool(TOOL_SEARCH, {"supplier_name": "beta"}))
     assert isinstance(res_beta, list) and len(res_beta) > 0
     assert all("beta" in c["supplier_name"].lower() for c in res_beta)
@@ -148,76 +151,54 @@ async def _scenario_search_without_results(session):
 
 
 async def _scenario_detail_with_valid_id(session):
-    # Start from a valid id obtained from a real search.
     found = _payload(await session.call_tool(TOOL_SEARCH, {"supplier_name": "ALFA"}))
     assert isinstance(found, list) and len(found) > 0
     reference = found[0]
 
     detail = _payload(await session.call_tool(TOOL_DETAIL, {"id": reference["id"]}))
     assert isinstance(detail, dict), f"unexpected result: {detail!r}"
-    assert "error" not in detail
     assert detail["id"] == reference["id"]
     assert detail["number"] == reference["number"]
     assert detail["supplier_name"] == reference["supplier_name"]
     assert detail["status"] == reference["status"]
-    # Additional fields of the API detail.
+    
     for field in ("supplier_id", "description", "start_date", "end_date"):
         assert field in detail, f"the field {field!r} is missing from the detail"
 
 
 async def _scenario_detail_with_nonexistent_id(session):
-    detail = _payload(await session.call_tool(TOOL_DETAIL, {"id": "nonexistent"}))
-    assert isinstance(detail, dict), f"unexpected result: {detail!r}"
-    assert "error" in detail, "a nonexistent id must return an error"
+    result = await session.call_tool(TOOL_DETAIL, {"id": "nonexistent"})
+    err = _error_text(result)
+    assert "No contract with id" in err
 
 
 async def _scenario_access_denied(session):
-    """The protected contract (denied-001) returns a denied-access error."""
-    detail = _payload(await session.call_tool(TOOL_DETAIL, {"id": "denied-001"}))
-    assert isinstance(detail, dict), f"unexpected result: {detail!r}"
-    assert "error" in detail
-    assert "Access denied" in detail["error"], (
-        f"the message does not report denied access: {detail['error']!r}"
-    )
+    """The protected contract (denied-001) returns a denied-access ToolError."""
+    result = await session.call_tool(TOOL_DETAIL, {"id": "denied-001"})
+    err = _error_text(result)
+    assert "Access denied" in err, f"unexpected error message: {err!r}"
 
 
 async def _scenario_api_error(session):
-    """The contract that simulates an internal error (error-001) returns an HTTP 500 error."""
-    detail = _payload(await session.call_tool(TOOL_DETAIL, {"id": "error-001"}))
-    assert isinstance(detail, dict), f"unexpected result: {detail!r}"
-    assert "error" in detail
-    assert "HTTP 500" in detail["error"], (
-        f"the message does not report the 500 error: {detail['error']!r}"
-    )
+    """The contract simulating internal error (error-001) returns HTTP 500 error."""
+    result = await session.call_tool(TOOL_DETAIL, {"id": "error-001"})
+    err = _error_text(result)
+    assert "HTTP 500" in err, f"unexpected error message: {err!r}"
 
 
 async def _scenario_timeout(session):
-    """The contract that simulates a timeout (timeout-001) returns a timeout error."""
-    detail = _payload(await session.call_tool(TOOL_DETAIL, {"id": "timeout-001"}))
-    assert isinstance(detail, dict), f"unexpected result: {detail!r}"
-    assert "error" in detail
-    assert "timeout" in detail["error"].lower(), (
-        f"the message does not report the timeout: {detail['error']!r}"
-    )
+    """The contract simulating timeout (timeout-001) returns timeout error."""
+    result = await session.call_tool(TOOL_DETAIL, {"id": "timeout-001"})
+    err = _error_text(result)
+    assert "timeout" in err.lower(), f"unexpected error message: {err!r}"
 
 
 async def _scenario_empty_supplier_name(session):
-    """An empty supplier name must not return all contracts."""
-    total = _total_contracts()
+    """An empty supplier name must raise a ToolError."""
     for name in ("", "   "):
-        res = _payload(await session.call_tool(TOOL_SEARCH, {"supplier_name": name}))
-        if isinstance(res, list):
-            # Acceptable outcome: an empty list. Never, however, the whole table.
-            assert len(res) < total, (
-                f"the name {name!r} returned all the "
-                f"contracts ({len(res)} of {total})"
-            )
-        else:
-            assert isinstance(res, dict), f"unexpected result type: {type(res)}"
-            assert "error" in res, (
-                f"with the name {name!r} the tool did not return a list, "
-                "nor an error message"
-            )
+        result = await session.call_tool(TOOL_SEARCH, {"supplier_name": name})
+        err = _error_text(result)
+        assert "supplier_name cannot be empty" in err
 
 
 # ---------------------------------------------------------------------------
@@ -226,45 +207,36 @@ async def _scenario_empty_supplier_name(session):
 
 
 def test_tools_exposed():
-    """The search_contract and get_contract tools are published by the server."""
     _run(_scenario_tools_exposed)
 
 
 def test_search_with_results():
-    """search_contract returns the contracts of the matching suppliers."""
     _run(_scenario_search_with_results)
 
 
 def test_search_without_results():
-    """search_contract returns an empty list if no supplier matches."""
     _run(_scenario_search_without_results)
 
 
 def test_detail_with_valid_id():
-    """get_contract returns the full detail of an existing contract."""
     _run(_scenario_detail_with_valid_id)
 
 
 def test_detail_with_nonexistent_id():
-    """get_contract returns an error for a nonexistent id."""
     _run(_scenario_detail_with_nonexistent_id)
 
 
 def test_access_denied():
-    """get_contract returns a denied-access error for a protected contract."""
     _run(_scenario_access_denied)
 
 
 def test_api_error():
-    """get_contract returns a readable error when the API fails with HTTP 500."""
     _run(_scenario_api_error)
 
 
 def test_timeout():
-    """get_contract returns a timeout error if the API does not respond in time."""
     _run(_scenario_timeout)
 
 
 def test_empty_supplier_name_does_not_return_all():
-    """With an empty or space-only supplier name, search_contract does not return all contracts."""
     _run(_scenario_empty_supplier_name)

@@ -1,3 +1,5 @@
-mcp
-httpx
-python-dotenv
+# requirements.txt
+
+mcp==2.2.0
+pytest==9.1.1
+httpx==0.28.1
