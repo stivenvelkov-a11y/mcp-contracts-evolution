@@ -1,0 +1,177 @@
+openapi: 3.0.3
+info:
+  title: Contracts API (read-only subset)
+  version: "1"
+  description: >
+    Read-only subset of the Evolution Contracts API, with synthetic examples.
+    Authentication is a bearer token; additional context headers, if required by
+    a deployment, are supplied by the environment and must be configurable.
+servers:
+  - url: https://example.invalid/contracts-service-v1
+security:
+  - bearer: []
+paths:
+  /api/contracts:
+    get:
+      operationId: listContracts
+      summary: List contracts (no pagination; plain JSON array)
+      parameters:
+        - { name: search, in: query, schema: { type: string }, description: "Free text; also matches contract number, description, file name" }
+        - { name: supplierId, in: query, schema: { type: string } }
+        - { name: client, in: query, schema: { type: string } }
+        - name: status
+          in: query
+          description: Repeatable
+          schema: { type: array, items: { $ref: "#/components/schemas/ContractStatus" } }
+        - { name: startFrom, in: query, schema: { type: string, format: date } }
+        - { name: startTo, in: query, schema: { type: string, format: date } }
+        - { name: endFrom, in: query, schema: { type: string, format: date } }
+        - { name: endTo, in: query, schema: { type: string, format: date } }
+        - { name: amountMin, in: query, schema: { type: number } }
+        - { name: amountMax, in: query, schema: { type: number } }
+        - { name: currency, in: query, schema: { type: string } }
+        - { name: contractNumber, in: query, schema: { type: string } }
+        - { name: description, in: query, schema: { type: string } }
+        - { name: latestVersionOnly, in: query, schema: { type: boolean } }
+      responses:
+        "200":
+          description: Matching contracts (possibly empty)
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Contract" } }
+              example:
+                - id: "c-001"
+                  contractNumber: "CT-2026-001"
+                  description: "Framework supply agreement"
+                  supplierId: "s-100"
+                  supplierName: "Alfa S.r.l."
+                  status: VALID
+                  startDate: "2026-01-01"
+                  endDate: "2027-12-31"
+                  totalValue: 120000.00
+                  currency: EUR
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/contracts/{contractId}:
+    get:
+      operationId: getContract
+      summary: Contract detail
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The contract
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contract" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404":
+          description: Unknown id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "Contract not found." }
+  /api/contracts/{contractId}/clauses:
+    get:
+      operationId: listClauses
+      summary: Clauses of a contract (optional for the MCP tools)
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Clauses
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Clause" } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  responses:
+    Error:
+      description: >
+        400 VALIDATION_ERROR (or FIELD_VALIDATION_ERROR with fieldErrors),
+        401 missing/invalid credentials (body may be empty),
+        403 FORBIDDEN, 404 NOT_FOUND, other REQUEST_FAILED
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      properties:
+        code: { type: string, example: FORBIDDEN }
+        message: { type: string }
+        fieldErrors: { type: object, additionalProperties: true }
+    ContractStatus:
+      type: string
+      enum: [DRAFT, PROCESSING, NEGOTIATION, TO_BE_VALIDATED, VALID, CLOSE_TO_EXPIRATION, EXPIRED, OLD_VERSION]
+    Contract:
+      type: object
+      description: Fields may be null. Dates are ISO yyyy-mm-dd, timestamps ISO-8601 UTC.
+      properties:
+        id: { type: string }
+        contractNumber: { type: string }
+        description: { type: string }
+        client: { type: string }
+        vatNumber: { type: string }
+        fileName: { type: string }
+        supplierId: { type: string }
+        supplierName: { type: string }
+        signingDate: { type: string, format: date }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        renewalDate: { type: string, format: date }
+        totalValue: { type: number }
+        currency: { type: string }
+        purchaseType: { type: string, enum: [DIRECT, INDIRECT] }
+        earlyWithdrawal: { type: boolean }
+        withdrawalFrom: { type: string, format: date }
+        withdrawalNoticeDays: { type: integer }
+        tacitRenewal: { type: boolean }
+        renewalNoticeDays: { type: integer }
+        category: { type: string }
+        owner: { type: string }
+        version: { type: integer }
+        inChargeTo: { type: string }
+        inChargeToUserId: { type: string }
+        assigneeType: { type: string, enum: [INTERNAL, EXTERNAL, NOT_DEFINED] }
+        slaSummary: { type: string }
+        status: { $ref: "#/components/schemas/ContractStatus" }
+        riskLevel: { type: string, enum: [LOW, MEDIUM, HIGH] }
+        tags: { type: array, items: { type: string } }
+        milestones: { type: array, items: { type: string } }
+        categoryNodeIds: { type: array, items: { type: string } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        documents: { type: array, items: { $ref: "#/components/schemas/Document" } }
+        customFields: { type: object, additionalProperties: true }
+    Document:
+      type: object
+      description: Metadata only; no download URL.
+      properties:
+        id: { type: integer }
+        fileName: { type: string }
+        fileType: { type: string }
+        description: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer }
+        uploadedAt: { type: string, format: date-time }
+        documentType: { type: string }
+        language: { type: string }
+        isInternal: { type: boolean }
+        isExternal: { type: boolean }
+    Clause:
+      type: object
+      properties:
+        id: { type: integer }
+        clauseCode: { type: string, example: PAYMENT }
+        clauseType: { type: string, example: commercial }
+        description: { type: string }
+        standardId: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }

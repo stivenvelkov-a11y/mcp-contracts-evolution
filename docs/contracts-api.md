@@ -34,3 +34,26 @@ Current statuses: `DRAFT`, `PROCESSING`, `NEGOTIATION`, `TO_BE_VALIDATED`, `VALI
 - The list endpoint currently has no pagination and filters the tenant's records in memory. Keep MCP responses small; discuss backend pagination before using large datasets.
 - For a local simulation, cover results, an empty search, an unknown ID, denied access, and separation between synthetic tenants. The exact HTTP error mapping for the live environment must be verified with the team.
 - The real API URL, test identity, and token flow will be provided after the local integration is reviewed. Do not invent tenant headers or forward an arbitrary bearer token.
+
+## Observable API behaviour
+
+The machine-readable description of the endpoints is in
+[contracts-openapi.yaml](contracts-openapi.yaml). Build the simulation from it.
+
+- **Base path:** all endpoints live under a service prefix that is part of the base URL
+  (`EVOLUTION_API_BASE_URL`); the code appends only `/api/contracts...`.
+- **Authentication:** bearer token. Some deployments also require context headers,
+  supplied by the environment: accept them as configuration, never hard-code or invent them.
+- **Errors:** JSON body `{"code": "<CODE>", "message": "<text>"}`.
+  - 400 `VALIDATION_ERROR` (or `FIELD_VALIDATION_ERROR`, with a `fieldErrors` object)
+  - 401 missing or invalid credentials (the body may be empty or not JSON)
+  - 403 `FORBIDDEN`
+  - 404 `NOT_FOUND`
+  - anything else `REQUEST_FAILED`
+- **List:** plain JSON array, no pagination, possibly empty. `search` is free text and
+  also matches contract number, description and file name; filter by supplier name on the
+  tool side if the tool needs to. `status` can be repeated.
+- **Detail:** one object. Almost every field can be null; never assume a field is present.
+- **Documents:** metadata only, no download URL.
+- The error mapping on the live environment is verified separately; the simulation follows
+  this list.
